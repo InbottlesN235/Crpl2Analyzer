@@ -188,3 +188,4 @@ Crpl2Analyzer.exe --selftest "xxx.crpl2" out_dir
 
 本工具不包含任何游戏资源，只读取玩家自己录制的回放文件。
 格式来源、社区致谢以及本项目通过实测补充的结论见 [CREDITS.md](CREDITS.md)；版本改动见 [CHANGELOG.md](CHANGELOG.md)。
+本项目使用了DeepSeek 制作
