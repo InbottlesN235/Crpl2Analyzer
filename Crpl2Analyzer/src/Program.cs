@@ -74,6 +74,8 @@ namespace Crpl2
     {
         readonly AppState st = new AppState();
         readonly IView[] views = { new OverviewView(), new AccuracyView(), new XAccView(), new ErrorView(), new TimelineView(), new KeysView(), new CompareView(), new DataView() };
+        ScorePanel scorePanel;
+        const int ScoreTab = 7;   // TabNames 里「评分估算」的位置
         int viewIndex = 0;
         int hoverTab = -1;
         string status = "就绪 · 拖入 .crpl2 回放文件，或点击「打开回放」";
@@ -125,15 +127,18 @@ namespace Crpl2
                 hoverTab = -1;
                 nav.Invalidate(TabRect(old));
             };
-            nav.MouseDown += (s, e) => { int h = TabAt(e.X); if (h >= 0) { viewIndex = h; host.View = views[h]; host.Invalidate(); nav.Invalidate(); } };
+            nav.MouseDown += (s, e) => { int h = TabAt(e.X); if (h >= 0) SelectView(h); };
 
             header = new DoubleBufferedPanel { Dock = DockStyle.Top, Height = 64, BackColor = Theme.Bg };
             header.Paint += HeaderPaint;
 
+            scorePanel = new ScorePanel { Dock = DockStyle.Fill, Visible = false, State = st };
             Controls.Add(host);
+            Controls.Add(scorePanel);
             Controls.Add(nav);
             Controls.Add(header);
             Controls.Add(statusBar);
+            scorePanel.BringToFront();
 
             BuildHeaderControls();
             AllowDrop = true;
@@ -175,6 +180,7 @@ namespace Crpl2
                 {
                     st.Selected = cbo.SelectedIndex;
                     host.Invalidate();
+                    if (scorePanel != null) scorePanel.SyncFromReplay();
                     nav.Invalidate();
                     UpdateStatus();
                 }
@@ -229,7 +235,7 @@ namespace Crpl2
             }
         }
 
-        string[] TabNames = { "总览", "准度分布", "X-Acc曲线", "误差", "时间轴", "按键", "对比", "数据" };
+        string[] TabNames = { "总览", "准度分布", "X-Acc曲线", "误差", "时间轴", "按键", "对比", "评分估算", "数据" };
 
         int TabAt(int x)
         {
@@ -279,9 +285,15 @@ namespace Crpl2
             {
                 var cur = st.Current;
                 string info = (cur == null ? "" : cur.FileName) + "  ·  " + st.Files.Count + " 个文件";
-                float maxW = Math.Min(nav.Width * 0.42f, 640f);
-                Chart.TextRight(g, Chart.Ellipsis(g, info, Theme.F(8.5f, false), maxW),
-                    Theme.F(8.5f, false), Theme.Faint, nav.Width - 18, 17, maxW);
+                int tabsW = 16;
+                for (int k = 0; k < TabNames.Length; k++) tabsW += TabWidth(k);
+                float maxW = nav.Width - tabsW - 26f;
+                if (maxW > 120f)
+                {
+                    maxW = Math.Min(maxW, 640f);
+                    Chart.TextRight(g, Chart.Ellipsis(g, info, Theme.F(8.5f, false), maxW),
+                        Theme.F(8.5f, false), Theme.Faint, nav.Width - 18, 17, maxW);
+                }
             }
         }
 
@@ -310,12 +322,30 @@ namespace Crpl2
 
         public void LoadPaths(string[] paths) { LoadFiles(paths); }
 
+        // tab 序号 → views 下标（评分估算页不是 IView）
+        int ViewIndexFor(int tab)
+        {
+            if (tab < ScoreTab) return tab;
+            return tab - 1;
+        }
+
         public void SelectView(int index)
         {
-            if (index < 0 || index >= views.Length) return;
+            if (index < 0 || index >= TabNames.Length) return;
             viewIndex = index;
-            host.View = views[index];
-            host.Invalidate();
+            bool score = index == ScoreTab;
+            if (scorePanel != null) scorePanel.Visible = score;
+            host.Visible = !score;
+            if (!score)
+            {
+                host.View = views[ViewIndexFor(index)];
+                host.Invalidate();
+            }
+            else
+            {
+                scorePanel.SyncFromReplay();
+                scorePanel.Invalidate();
+            }
             nav.Invalidate();
         }
 
@@ -379,11 +409,11 @@ namespace Crpl2
         // ------------------------------------------------------------------
         void ExportPng()
         {
-            if (st.Ok == null) { MessageBox.Show(this, "先打开一个回放文件。"); return; }
+            if (st.Ok == null && viewIndex != ScoreTab) { MessageBox.Show(this, "先打开一个回放文件。"); return; }
             using (var d = new SaveFileDialog())
             {
                 d.Filter = "PNG 图片 (*.png)|*.png";
-                d.FileName = (views[viewIndex].Title) + ".png";
+                d.FileName = TabNames[viewIndex] + ".png";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 var size = new Size(Math.Max(host.Width, 1200), Math.Max(host.Height, 760));
                 using (var bmp = new Bitmap(size.Width, size.Height))
@@ -392,7 +422,8 @@ namespace Crpl2
                     {
                         Theme.Prepare(g);
                         using (var br = new SolidBrush(Theme.Bg)) g.FillRectangle(br, 0, 0, bmp.Width, bmp.Height);
-                        views[viewIndex].Render(g, new Rectangle(16, 12, bmp.Width - 32, bmp.Height - 24), st);
+                        if (viewIndex == ScoreTab) scorePanel.RenderStatic(g, new Rectangle(0, 0, bmp.Width, bmp.Height));
+                        else views[ViewIndexFor(viewIndex)].Render(g, new Rectangle(16, 12, bmp.Width - 32, bmp.Height - 24), st);
                     }
                     bmp.Save(d.FileName, ImageFormat.Png);
                 }
@@ -440,10 +471,10 @@ namespace Crpl2
                 "支持容器：\"CRP2\"(v2) 与 \"CRP4\"(v4)，内部 formatVersion 2 / 3\n" +
                 "  均为 AES-256-CBC(PKCS7)，key=SHA-256(\"qwerty\")，IV=SHA-256(\"potato\")[0:16]\n\n" +
                 "formatVersion 3（Creplay 2.17 / ADOFAI 3.4.0）新增：\n" +
-                "  · 判定槽位扩到 16，Perfect 拆成 完美- / X完美 / 完美+\n" +
+                "  · 判定槽位扩到 16，Perfect 拆成三档（中心 ±12.5° 单独一档）\n" +
                 "  · 每次命中的角度误差与时间误差（可画误差散点与分布）\n" +
                 "  · keyCodes 由 ushort 变为 byte\n\n" +
-                "X-Acc 权重：完美档 1.00 / 早·晚完美 0.75 / 很过·很晚 0.40 / 过早·过晚 0.20",
+                "X-Acc 权重：完美类 1.00 / 早·晚完美 0.75 / 偏差档 0.40 / 严重偏差 0.20",
                 "关于", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
@@ -523,7 +554,7 @@ namespace Crpl2
             st.Selected = 0;
 
             IView[] views = { new OverviewView(), new AccuracyView(), new XAccView(), new ErrorView(), new TimelineView(), new KeysView(), new CompareView(), new DataView() };
-            string[] names = { "1-overview", "2-accuracy", "3-xacc", "4-error", "5-timeline", "6-keys", "7-compare", "8-data" };
+            string[] names = { "1-overview", "2-accuracy", "3-xacc", "4-error", "5-timeline", "6-keys", "7-compare", "8-score", "9-data" };
             var log = new System.Text.StringBuilder();
             log.AppendLine("file=" + file);
             if (!rp.IsLoaded) log.AppendLine("error=" + rp.LoadError);
@@ -545,7 +576,8 @@ namespace Crpl2
             }
 
             var size = new Size(1380, 800);
-            for (int k = 0; k < views.Length; k++)
+            ScorePanel sp = null;
+            for (int k = 0; k < names.Length; k++)
             {
                 using (var bmp = new Bitmap(size.Width, size.Height))
                 {
@@ -553,7 +585,15 @@ namespace Crpl2
                     {
                         Theme.Prepare(g);
                         using (var br = new SolidBrush(Theme.Bg)) g.FillRectangle(br, 0, 0, bmp.Width, bmp.Height);
-                        views[k].Render(g, new Rectangle(16, 12, bmp.Width - 32, bmp.Height - 24), st);
+                        if (k == 7)
+                        {
+                            if (sp == null) { sp = new ScorePanel(); sp.Size = size; sp.M.PerformSample(); }
+                            sp.RenderStatic(g, new Rectangle(0, 0, bmp.Width, bmp.Height));
+                        }
+                        else
+                        {
+                            views[k < 7 ? k : k - 1].Render(g, new Rectangle(16, 12, bmp.Width - 32, bmp.Height - 24), st);
+                        }
                     }
                     string p = Path.Combine(outDir, names[k] + ".png");
                     bmp.Save(p, ImageFormat.Png);

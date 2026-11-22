@@ -130,7 +130,8 @@ namespace Crpl2
                 keep.Select(i => rp.Shorts[ci[i]] + " " + vals[i].ToString("0")).ToArray(),
                 keep.Select(i => Theme.JudgeColor(rp.FormatVersion, ci[i])).ToArray(), 3, donutText.Width / 3f);
 
-            var barText = Chart.Card(g, mid[1], "判定分布", "各档判定的次数与占比" + (rp.FormatVersion >= 3 ? "（含 完美- / X完美 / 完美+）" : ""));
+            var barText = Chart.Card(g, mid[1], "判定分布", "各档判定的次数与占比" + (rp.FormatVersion >= 3
+                    ? "（含 " + rp.Shorts[3] + " / " + rp.Shorts[4] + " / " + rp.Shorts[5] + " 拆分）" : ""));
             Chart.BarChart(g, barText, Judge.Labels(rp, ci), vals, Judge.Colors(rp, ci), true, "0");
 
             var botRow = new Rectangle(r.X, r.Bottom - bottomH, r.Width, bottomH);
@@ -161,8 +162,8 @@ namespace Crpl2
             float ty = by + 30;
             Chart.Text(g, "判定权重", Theme.F(9f, true), Theme.Dim, badgeText.X, ty);
             Chart.Text(g, rp.FormatVersion >= 3
-                    ? "X完美/完美± 1.00 ｜ 早/晚完美 0.75 ｜ 很过/很晚 0.40 ｜ 过早/过晚 0.20"
-                    : "完美 1.00 ｜ 早/晚完美 0.75 ｜ 很过/很晚 0.40 ｜ 过早/过晚 0.20",
+                    ? "完美类 1.00 ｜ 早/晚完美 0.75 ｜ 偏差档 0.40 ｜ 严重偏差 0.20"
+                    : "完美 1.00 ｜ 早/晚完美 0.75 ｜ 偏差档 0.40 ｜ 严重偏差 0.20",
                 Theme.F(8.5f, false), Theme.Faint, badgeText.X, ty + 15);
             Chart.Text(g, rp.HasHitErrors ? "本文件含逐次命中误差 → 可看「误差」页" : "本版本不含逐次命中误差",
                 Theme.F(8.5f, false), rp.HasHitErrors ? Theme.Green : Theme.Faint, badgeText.X, ty + 30);
@@ -189,11 +190,11 @@ namespace Crpl2
             var vals = Judge.Values(rp, ci);
 
             var barRect = Chart.Card(g, top[0], "判定分布",
-                "共 " + Fmt.Int(rp.JudgmentTotal) + " 击（格式 " + rp.FormatVersion + (rp.FormatVersion >= 3 ? "  ·  含 X完美拆分" : "") + "）");
+                "共 " + Fmt.Int(rp.JudgmentTotal) + " 击（格式 " + rp.FormatVersion + (rp.FormatVersion >= 3 ? "  ·  含 " + rp.Shorts[3] + " / " + rp.Shorts[4] + " / " + rp.Shorts[5] + " 拆分" : "") + "）");
             var split = L.Rows(barRect, 8, 1.12f, 0.88f);
             Chart.BarChart(g, split[0], Judge.Labels(rp, ci), vals, Judge.Colors(rp, ci), true, "0");
 
-            // 放大：剔除出现最多的那一档（v2 = 完美，v3 = X完美）
+            // 放大：剔除出现最多的那一档（v2 = 完美，v3 = 中心档）
             int dom = Judge.Dominant(rp, ci);
             var zoomIdx = ci.Where(i => i != dom).ToArray();
             using (var pen = new Pen(Theme.Border, 1f))
@@ -204,7 +205,7 @@ namespace Crpl2
 
             var pieRect = Chart.Card(g, top[1], "判定构成", "环形图");
             var keep = Enumerable.Range(0, ci.Length).Where(i => vals[i] > 0).ToArray();
-            string center = rp.FormatVersion >= 3 ? "X完美 " + Fmt.Int(rp.Idx(4)) : "完美 " + Fmt.Int(rp.Idx(3));
+            string center = rp.FormatVersion >= 3 ? rp.Shorts[4] + " " + Fmt.Int(rp.Idx(4)) : "完美 " + Fmt.Int(rp.Idx(3));
             Chart.Donut(g, new RectangleF(pieRect.X, pieRect.Y, pieRect.Width, pieRect.Height - 56),
                 keep.Select(i => vals[i]).ToArray(), keep.Select(i => Theme.JudgeColor(rp.FormatVersion, ci[i])).ToArray(),
                 Fmt.Pct(rp.EffectiveAccuracy, "0.00"), center, "X-Acc");
@@ -217,18 +218,15 @@ namespace Crpl2
             var cats = new List<string>();
             var early = new List<double>();
             var late = new List<double>();
-            if (rp.FormatVersion >= 3)
+            int[] pairIdx = rp.FormatVersion >= 3
+                ? new int[] { 0, 8, 1, 7, 2, 6, 3, 5 }
+                : new int[] { 0, 6, 1, 5, 2, 4 };
+            for (int k = 0; k + 1 < pairIdx.Length; k += 2)
             {
-                cats.Add("过早 / 过晚"); early.Add(rp.Idx(0)); late.Add(rp.Idx(8));
-                cats.Add("很过 / 很晚"); early.Add(rp.Idx(1)); late.Add(rp.Idx(7));
-                cats.Add("早完美 / 晚完美"); early.Add(rp.Idx(2)); late.Add(rp.Idx(6));
-                cats.Add("完美- / 完美+"); early.Add(rp.Idx(3)); late.Add(rp.Idx(5));
-            }
-            else
-            {
-                cats.Add("过早 / 过晚"); early.Add(rp.Idx(0)); late.Add(rp.Idx(6));
-                cats.Add("很过 / 很晚"); early.Add(rp.Idx(1)); late.Add(rp.Idx(5));
-                cats.Add("早完美 / 晚完美"); early.Add(rp.Idx(2)); late.Add(rp.Idx(4));
+                int a = pairIdx[k], b = pairIdx[k + 1];
+                cats.Add(rp.Shorts[a] + " / " + rp.Shorts[b]);
+                early.Add(rp.Idx(a));
+                late.Add(rp.Idx(b));
             }
             Chart.Symmetric(g, new Rectangle(symRect.X + 6, symRect.Y + 30, symRect.Width - 12, symRect.Height - 52),
                 cats.ToArray(), early.ToArray(), late.ToArray());
@@ -242,7 +240,8 @@ namespace Crpl2
             var loss = new double[rp.Judgment.Length];
             var w = rp.Weights;
             for (int k = 0; k < rp.Judgment.Length; k++)
-                loss[k] = rp.JudgmentTotal > 0 ? rp.Judgment[k] * (1 - (k < w.Length ? w[k] : 1.0)) / rp.JudgmentTotal * 100 : 0;
+                loss[k] = (k < rp.AccuracySlots && rp.AccuracyN > 0)
+                        ? rp.Judgment[k] * (1 - (k < w.Length ? w[k] : 1.0)) / rp.AccuracyN * 100 : 0;
             var keep2 = Enumerable.Range(0, rp.Judgment.Length).Where(i => loss[i] > 0).ToArray();
             if (keep2.Length == 0)
             {
@@ -285,7 +284,7 @@ namespace Crpl2
             var rows = L.Rows(r, 14, 1.32f, 1f);
             bool flat = rp.XAccSeries.Min() > 0.99999;
             var chartText = Chart.Card(g, rows[0], "实时 X-Acc",
-                string.Format("每命中一击后的累计 X-Acc ｜ {0} 击 ｜ 判定窗：X完美 ±{1:0.#}° / 完美 ±{2:0.#}° / 有效 ±{3:0.#}°{4}",
+                string.Format("每命中一击后的累计 X-Acc ｜ {0} 击 ｜ 判定窗：x完美 ±{1:0.#}° / 完美带 ±{2:0.#}° / 有效 ±{3:0.#}°{4}",
                     rp.HitAngleErr.Length, rp.XpDeg, rp.PureDeg, rp.CountedDeg,
                     flat ? " ｜ 全程满分，曲线平直" : ""));
 
@@ -318,22 +317,24 @@ namespace Crpl2
                 for (int k = a; k <= b; k++) if (rp.HitMarginIdx[k] == 4) xp++;
                 rowsT.Add(new KeyValuePair<string, string>(
                     string.Format("#{0,3}–#{1,-3}", a + 1, b + 1),
-                    string.Format("X-Acc {0,7}   X完美 {1,5} ({2})", Fmt.Pct(segAcc, "0.000"), xp, Fmt.Pct((double)xp / (b - a + 1), "0.0"))));
+                    string.Format("X-Acc {0,7}   x完美 {1,4} ({2})", Fmt.Pct(segAcc, "0.000"), xp, Fmt.Pct((double)xp / (b - a + 1), "0.0"))));
             }
             Chart.Table(g, secRect, rowsT, 92);
 
             // 验证卡片
             var verRect = Chart.Card(g, bot[1], "反推校验", "由角度误差逐击分类，再和文件内的判定汇总对照");
             var items = new List<KeyValuePair<string, string>>();
-            string[] keys = rp.FormatVersion >= 3
-                ? new string[] { "完美-", "X完美", "完美+" }
-                : new string[] { "完美" };
-            foreach (var key in keys)
+            items.Add(new KeyValuePair<string, string>(rp.Shorts[4],
+                string.Format("文件 {0,4}  ／  反推 {1,4}", rp.Idx(4), rp.DerivedJudge[4])));
+            if (rp.FormatVersion >= 3)
             {
-                int idx = Array.IndexOf(rp.Shorts, key);
-                if (idx < 0) continue;
-                items.Add(new KeyValuePair<string, string>(key,
-                    string.Format("文件 {0,4}  ／  反推 {1,4}", rp.Idx(idx), idx < rp.DerivedJudge.Length ? rp.DerivedJudge[idx] : 0)));
+                items.Add(new KeyValuePair<string, string>(rp.Shorts[3] + " / " + rp.Shorts[5],
+                    string.Format("文件 {0,4}  ／  反推 {1,4}", rp.Idx(3) + rp.Idx(5), rp.DerivedJudge[3] + rp.DerivedJudge[5])));
+            }
+            else
+            {
+                items.Add(new KeyValuePair<string, string>("完美",
+                    string.Format("文件 {0,4}  ／  反推 {1,4}", rp.Idx(3), rp.DerivedJudge[3])));
             }
             items.Add(new KeyValuePair<string, string>("最终 X-Acc",
                 string.Format("文件 {0}  ／  反推 {1}", Fmt.Pct(rp.AccuracyFile, "0.0000"), Fmt.Pct(rp.XAccFinal, "0.0000"))));
@@ -427,7 +428,7 @@ namespace Crpl2
                 colors[k] = Math.Abs(mid) < Xp ? Theme.Green : Math.Abs(mid) < Pure ? Color.FromArgb(196, 214, 96) : Theme.Orange;
             }
             Chart.BarChart(g, histText, labels, counts.Select(x => (double)x).ToArray(), colors, false, "0");
-            Chart.Text(g, "档位间距 2°；绿 = X完美窗内，黄绿 = 完美窗内", Theme.F(8f, false), Theme.Faint, histText.X, histText.Bottom - 14);
+            Chart.Text(g, "档位间距 2°；绿 = x完美窗 (±" + rp.XpDeg.ToString("0.#") + "°) 内，黄绿 = 完美带内", Theme.F(8f, false), Theme.Faint, histText.X, histText.Bottom - 14);
 
             var statText = Chart.Card(g, bot[1], "误差统计", null);
             double meanAbs = deg.Average(x => Math.Abs(x));
@@ -440,8 +441,8 @@ namespace Crpl2
             items.Add(new KeyValuePair<string, string>("平均 |误差|", meanAbs.ToString("0.0000") + "°   (" + (meanAbs * 60.0 / Math.Max(rp.Bpm, 1) / 180.0 * 1000).ToString("0.00") + " ms)"));
             items.Add(new KeyValuePair<string, string>("RMS", rms.ToString("0.0000") + "°"));
             items.Add(new KeyValuePair<string, string>("最大 |误差|", maxAbs.ToString("0.0000") + "°"));
-            items.Add(new KeyValuePair<string, string>("X完美窗内 (±12.5°)", Fmt.Int(inXp) + "  (" + Fmt.Pct((double)inXp / deg.Length, "0.00") + ")"));
-            items.Add(new KeyValuePair<string, string>("完美窗内 (±30°)", Fmt.Int(inPure) + "  (" + Fmt.Pct((double)inPure / deg.Length, "0.00") + ")"));
+            items.Add(new KeyValuePair<string, string>("x完美窗内 (±" + rp.XpDeg.ToString("0.#") + "°)", Fmt.Int(inXp) + "  (" + Fmt.Pct((double)inXp / deg.Length, "0.00") + ")"));
+            items.Add(new KeyValuePair<string, string>("完美带内 (±" + rp.PureDeg.ToString("0.#") + "°)", Fmt.Int(inPure) + "  (" + Fmt.Pct((double)inPure / deg.Length, "0.00") + ")"));
             items.Add(new KeyValuePair<string, string>("偏早 / 偏晚", early + " / " + later));
             Chart.Table(g, statText, items, 132);
         }

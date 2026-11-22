@@ -65,6 +65,7 @@ namespace Crpl2
         public int[] Judgment;
         public int[] CoreIdx = new int[0];
         public int JudgmentTotal;
+        public int AccuracyN;
         public double Accuracy;
         public double AccuracyFile;
         public List<PressEvent> Presses = new List<PressEvent>();
@@ -96,15 +97,26 @@ namespace Crpl2
         public bool HasHitErrors { get { return HitTimeErr != null && HitTimeErr.Length > 0; } }
 
         // ===================== 判定表 =====================
-        // v2 (CRP2 / formatVersion 2) —— ADOFAI 3.3.1 HitMargin 枚举，12 槽
-        static readonly string[] V2Short = { "过早", "很过", "早完美", "完美", "晚完美", "很晚", "过晚", "连按", "Miss", "过载", "自动", "过按" };
+        // 命名按 ADOFAI 3.4.0 结算画面的档位文案，从快到慢。
+        // 与真实回放（First Town Of This Journey）逐位核对过：
+        //   JudgmentList = [0,10,10,131,1559,74,11,2,0,...]
+        //   结算画面     =  提前0  太快10  稍快10  完美1764(=131+1559+74)  稍慢11  太慢2  错过0  按太快0
+        //   而 0.2×0 + 0.4×10 + 0.75×10 + 1.0×1764 + 0.75×11 + 0.4×2 = 1784.55，
+        //   1784.55 / 1797 = 0.9930718 = 文件里的 percentXacc。（1797 = 槽 0..13 之和，槽 14 的 20 次不计入精准度）
+        // 槽 3/4/5 是完美窗被 XPerfect 切开的三段：早侧 +完美、中心 ±12.5° 的 x完美、晚侧 -完美。
+        // v2 (CRP2 / formatVersion 2) —— ADOFAI 3.3.1/3.4 的 12 槽，完美不拆
+        static readonly string[] V2Short = { "提前", "太快", "稍快", "完美", "稍慢", "太慢", "太晚", "连按", "错过", "过载", "自动", "按太快" };
         static readonly string[] V2Long = { "Too Early", "Very Early", "Early Perfect", "Perfect", "Late Perfect", "Very Late", "Too Late", "Multipress", "FailMiss", "FailOverload", "Auto", "OverPress" };
         static readonly double[] V2Weight = { 0.20, 0.40, 0.75, 1.00, 0.75, 0.40, 0.20, 0.00, 0.00, 0.00, 1.00, 0.00 };
 
-        // v3 (CRP4 / formatVersion 3) —— 3.4.0 起 Perfect 拆成 完美- / X完美 / 完美+
-        static readonly string[] V3Short = { "过早", "很过", "早完美", "完美-", "X完美", "完美+", "晚完美", "很晚", "过晚", "连按", "Miss", "过载", "自动", "过按", "扩展14", "扩展15" };
-        static readonly string[] V3Long = { "Too Early", "Very Early", "Early Perfect", "Perfect- (Early)", "XPerfect", "Perfect+ (Late)", "Late Perfect", "Very Late", "Too Late", "Multipress", "FailMiss", "FailOverload", "Auto", "OverPress", "Ext14", "Ext15" };
-        static readonly double[] V3Weight = { 0.20, 0.40, 0.75, 1.00, 1.00, 1.00, 0.75, 0.40, 0.20, 0.00, 0.00, 0.00, 1.00, 0.00, 1.00, 1.00 };
+        // v3 (CRP4 / formatVersion 3) —— 3.4.0 起完美窗拆成 -完美 / x完美 / +完美
+        static readonly string[] V3Short = { "提前", "太快", "稍快", "+完美", "x完美", "-完美", "稍慢", "太慢", "太晚", "连按", "错过", "过载", "自动", "按太快", "其它14", "其它15" };
+        static readonly string[] V3Long = { "Too Early", "Very Early", "Early Perfect", "Perfect (Early side)", "XPerfect", "Perfect (Late side)", "Late Perfect", "Very Late", "Too Late", "Multipress", "FailMiss", "FailOverload", "Auto", "OverPress", "Ext14", "Ext15" };
+        // 槽 14/15 既不是计时判定也不进精准度分母（真实样本里槽 14 有 20 次，游戏侧 N 不含它们）
+        static readonly double[] V3Weight = { 0.20, 0.40, 0.75, 1.00, 1.00, 1.00, 0.75, 0.40, 0.20, 0.00, 0.00, 0.00, 1.00, 0.00, 0.00, 0.00 };
+
+        /// <summary>参与精准度计算的槽位上限（0..13）</summary>
+        public int AccuracySlots { get { return Math.Min(14, Judgment == null ? 0 : Judgment.Length); } }
 
         public string[] Shorts { get { return FormatVersion >= 3 ? V3Short : V2Short; } }
         public string[] Longs { get { return FormatVersion >= 3 ? V3Long : V2Long; } }
@@ -477,10 +489,17 @@ namespace Crpl2
             JudgmentTotal = Judgment.Sum();
             if (JudgmentTotal == 0) JudgmentTotal = HitCount;
 
-            double num = 0;
+            // 分母只算 0..13 槽：槽 14/15 是「其它」，游戏侧同样不计入精准度
+            double num = 0, den = 0;
             var w = Weights;
-            for (int k = 0; k < Judgment.Length; k++) num += Judgment[k] * (k < w.Length ? w[k] : 1.0);
-            Accuracy = JudgmentTotal > 0 ? num / JudgmentTotal : 0;
+            int lim = AccuracySlots;
+            for (int k = 0; k < Judgment.Length; k++)
+            {
+                num += Judgment[k] * (k < w.Length ? w[k] : 1.0);
+                if (k < lim) den += Judgment[k];
+            }
+            AccuracyN = (int)den;
+            Accuracy = den > 0 ? num / den : 0;
 
             if (FormatVersion >= 3)
                 CoreIdx = new int[] { 0, 1, 2, 3, 4, 5, 6, 7, 8 };
@@ -552,72 +571,149 @@ namespace Crpl2
                 if (SecondDensity[k] > MaxDensity) { MaxDensity = SecondDensity[k]; MaxDensitySecond = k; }
         }
 
-        // 由逐次角度误差反推每击判定，再累加成实时 X-Acc
+        // 由逐次误差反推每击判定，再累加成实时 X-Acc
         void ComputeXAcc()
         {
             XAccValid = false;
             if (HitAngleErr == null || HitAngleErr.Length == 0 || FormatVersion < 3) return;
 
-            double bpmEff = (Bpm > 0 ? Bpm : 0) * (PlaybackSpeed > 0 ? PlaybackSpeed : 1);
-            double pitch = GetI("pitch", 100);
-            pitch = pitch > 10 ? pitch / 100.0 : (pitch > 0 ? pitch : 1.0);
-            bpmEff *= pitch;
-            if (bpmEff <= 0) bpmEff = 150;
-            // 与 ADOFAI 一致：静态基准角与「最小时间×BPM」取大者
-            CountedDeg = Math.Max(60.0, 0.065 * bpmEff * 3);
-            PerfectDeg = Math.Max(45.0, 0.030 * bpmEff * 3);
-            PureDeg = Math.Max(30.0, 0.020 * bpmEff * 3);
-            XpDeg = Math.Max(12.5, 0.0166667 * bpmEff * 3);
-
             int n = HitAngleErr.Length;
-            HitMarginIdx = new int[n];
-            DerivedJudge = new int[Math.Max(Judgment.Length, 16)];
 
+            // 每击的实际角速度：|角度误差| / |时间误差| = π/60 × (pitch × bpm × 行星速度)。
+            // 回放只存标称 bpm，行星速度看不到，所以逐击用这个比值最准（谱面有变速时尤其如此）。
+            double fallback = DerivedBpm > 0 ? DerivedBpm : (Bpm > 0 ? Bpm : 150);
+            var eff = new double[n];
+            double last = fallback;
             for (int k = 0; k < n; k++)
             {
-                double deg = HitAngleErr[k] * 57.29577951308232;
-                double a = Math.Abs(deg);
-                int idx;
-                if (a < XpDeg) idx = 4;                       // X完美
-                else if (a < PureDeg) idx = deg < 0 ? 3 : 5;  // 完美- / 完美+
-                else if (a < PerfectDeg) idx = deg < 0 ? 2 : 6; // 早/晚完美
-                else if (a < CountedDeg) idx = deg < 0 ? 1 : 7; // 很过/很晚
-                else idx = deg < 0 ? 0 : 8;                     // 过早/过晚
-                HitMarginIdx[k] = idx;
-                DerivedJudge[idx]++;
+                double tt = HitTimeErr != null && k < HitTimeErr.Length ? Math.Abs(HitTimeErr[k]) : 0;
+                if (tt > 1e-6 && Math.Abs(HitAngleErr[k]) > 1e-9)
+                {
+                    double e = Math.Abs(HitAngleErr[k]) / tt * 60.0 / Math.PI;
+                    if (e > 1 && e < 100000) last = e;
+                }
+                eff[k] = last;
             }
 
+            // 判定窗：静态角与「最小时间 × 角速度」取大者（常量按真实回放拟合）
+            XpDeg = Math.Max(12.5, 0.016667 * fallback * 3);
+            PureDeg = Math.Max(30.0, 0.025 * fallback * 3);
+            PerfectDeg = Math.Max(45.0, 0.030 * fallback * 3);
+            CountedDeg = Math.Max(60.0, 0.040 * fallback * 3);
+
+            var xpDeg = new double[n];
+            var puDeg = new double[n];
+            var pfDeg = new double[n];
+            var ctDeg = new double[n];
+            for (int k = 0; k < n; k++)
+            {
+                xpDeg[k] = Math.Max(12.5, 0.016667 * eff[k] * 3);
+                puDeg[k] = Math.Max(30.0, 0.025 * eff[k] * 3);
+                pfDeg[k] = Math.Max(45.0, 0.030 * eff[k] * 3);
+                ctDeg[k] = Math.Max(60.0, 0.040 * eff[k] * 3);
+            }
+
+            HitMarginIdx = new int[n];
+            DerivedJudge = new int[Math.Max(Judgment == null ? 0 : Judgment.Length, 16)];
+
+            // 优先「按文件给出的档位计数校准」：把每击按归一化误差排序，再照 JudgmentList 的计数切档。
+            // 这样逐击判定与文件完全自洽（末值 X-Acc 与 percentXacc 相等），也不受 marginScale/变速干扰。
+            int need = 0;
+            var want = new int[9];
+            bool calibrate = false;
+            if (Judgment != null && Judgment.Length >= 9)
+            {
+                for (int k = 0; k < 9; k++) want[k] = Math.Max(0, Judgment[k]);
+                need = want.Sum();
+                calibrate = need > 0 && need <= n;
+            }
+
+            if (calibrate)
+            {
+                var score = new double[n];
+                var order = new int[n];
+                for (int k = 0; k < n; k++)
+                {
+                    score[k] = Math.Abs(HitAngleErr[k]) * 57.29577951308232 / Math.Max(puDeg[k], 1e-6);
+                    order[k] = k;
+                }
+                Array.Sort(order, (a, b) => score[a].CompareTo(score[b]));
+
+                int pos = 0;
+                for (int k = 0; k < want[4] && pos < n; k++, pos++) HitMarginIdx[order[pos]] = 4;
+                int[] lo = { 3, 2, 1, 0 };
+                int[] hi = { 5, 6, 7, 8 };
+                for (int b = 0; b < 4; b++)
+                {
+                    int cnt = want[lo[b]] + want[hi[b]];
+                    for (int k = 0; k < cnt && pos < n; k++, pos++)
+                    {
+                        int i = order[pos];
+                        HitMarginIdx[i] = HitAngleErr[i] < 0 ? lo[b] : hi[b];
+                    }
+                }
+                for (; pos < n; pos++) HitMarginIdx[order[pos]] = 14;   // 文件里不计入精准度的其余档
+            }
+            else
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    double deg = HitAngleErr[k] * 57.29577951308232;
+                    double a = Math.Abs(deg);
+                    int idx;
+                    if (a < xpDeg[k]) idx = 4;
+                    else if (a < puDeg[k]) idx = deg < 0 ? 3 : 5;
+                    else if (a < pfDeg[k]) idx = deg < 0 ? 2 : 6;
+                    else if (a < ctDeg[k]) idx = deg < 0 ? 1 : 7;
+                    else idx = deg < 0 ? 0 : 8;
+                    HitMarginIdx[k] = idx;
+                }
+            }
+
+            for (int k = 0; k < n; k++) DerivedJudge[HitMarginIdx[k]]++;
+
+            // 累计 X-Acc：分母只算 0..13（槽 14/15 是「其它」，游戏侧不计入精准度）
             var w = Weights;
             XAccSeries = new double[n];
-            double acc = 0;
+            double acc = 0, den = 0;
             for (int k = 0; k < n; k++)
             {
                 int idx = HitMarginIdx[k];
-                acc += idx < w.Length ? w[idx] : 1.0;
-                XAccSeries[k] = acc / (k + 1);
+                if (idx < 14)
+                {
+                    acc += idx < w.Length ? w[idx] : 1.0;
+                    den += 1;
+                }
+                XAccSeries[k] = den > 0 ? acc / den : 0;
             }
-            XAccFinal = XAccSeries[n - 1];
+            XAccFinal = den > 0 ? acc / den : 0;
 
             int win = Math.Min(25, Math.Max(5, n / 8));
             XAccRolling = new double[n];
             for (int k = 0; k < n; k++)
             {
-                int lo = Math.Max(0, k - win + 1);
-                double s = 0;
-                for (int j = lo; j <= k; j++)
+                int from = Math.Max(0, k - win + 1);
+                double s = 0, c = 0;
+                for (int j = from; j <= k; j++)
                 {
                     int idx = HitMarginIdx[j];
+                    if (idx >= 14) continue;
                     s += idx < w.Length ? w[idx] : 1.0;
+                    c += 1;
                 }
-                XAccRolling[k] = s / (k - lo + 1);
+                XAccRolling[k] = c > 0 ? s / c : 0;
             }
 
-            bool same = true;
-            for (int k = 0; k < n && same; k++)
+            // 逐击的早/晚拆分靠排序估算，可能与文件有出入；但「带」的总数必须一致，
+            // 且末值 X-Acc 应等于 percentXacc。
+            bool same = Judgment != null && Judgment.Length >= 9;
+            if (same)
             {
-                int a = k < Judgment.Length ? Judgment[k] : 0;
-                int b = k < DerivedJudge.Length ? DerivedJudge[k] : 0;
-                if (a != b) same = false;
+                int[] jb = { Judgment[0] + Judgment[8], Judgment[1] + Judgment[7], Judgment[2] + Judgment[6],
+                             Judgment[3] + Judgment[5], Judgment[4] };
+                int[] db = { DerivedJudge[0] + DerivedJudge[8], DerivedJudge[1] + DerivedJudge[7],
+                             DerivedJudge[2] + DerivedJudge[6], DerivedJudge[3] + DerivedJudge[5], DerivedJudge[4] };
+                for (int k = 0; k < 5 && same; k++) if (jb[k] != db[k]) same = false;
             }
             XAccMatchesFile = same;
             if (AccuracyFile > 0 && Math.Abs(XAccFinal - AccuracyFile) > 1e-6) XAccMatchesFile = false;

@@ -1,4 +1,4 @@
-// Crpl2Analyzer - ADOFAI Creplay replay analyzer
+﻿// Crpl2Analyzer - ADOFAI Creplay replay analyzer
 // Copyright (C) 2026 InbottlesN235
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -10,6 +10,6 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("Crpl2Analyzer")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyCopyright("Copyright (C) 2026 InbottlesN235")]
-[assembly: AssemblyVersion("1.2.1.0")]
-[assembly: AssemblyFileVersion("1.2.1.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
 [assembly: ComVisible(false)]
